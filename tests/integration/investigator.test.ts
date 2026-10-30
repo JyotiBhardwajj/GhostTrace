@@ -1,23 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { runInvestigation } from '../../src/agent/investigator';
+import { checkOllamaHealth } from '../../src/model/ollama';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../fixtures/known-workaround-repo');
 
 describe('End-to-End Investigation with Fixture Repo', () => {
-  it('investigates why the retry workaround was added and cites real evidence', async () => {
+  it('investigates with deterministic fallback mode and verifies citations and caution', async () => {
     const output = await runInvestigation({
       repoPath: FIXTURE_DIR,
       question: 'Why was this retry workaround added, and can I safely remove it?',
       focusFile: 'src/paymentClient.ts',
+      forceFallback: true,
     });
 
     expect(output).toBeDefined();
-    expect(output.report).toBeDefined();
+    expect(output.inferenceMode).toBe('grounded-deterministic');
+    expect(output.modelUsed).toContain('fallback');
 
     const report = output.report;
     expect(report.question).toBe('Why was this retry workaround added, and can I safely remove it?');
     expect(report.summary.length).toBeGreaterThan(15);
+    // Explicitly contains removal guidance
+    expect(report.summary.toLowerCase()).toContain('not recommended');
 
     // Verify findings and evidence IDs
     expect(report.findings.length).toBeGreaterThan(0);
@@ -53,4 +58,27 @@ describe('End-to-End Investigation with Fixture Repo', () => {
     expect(stageNames).toContain('SEARCH_HISTORY');
     expect(stageNames).toContain('COMPLETE');
   });
+
+  it('runs investigation pipeline through active model or graceful fallback', async () => {
+    const health = await checkOllamaHealth();
+    console.log('[TEST] Ollama Health Status:', health.running, health.models);
+
+    const output = await runInvestigation({
+      repoPath: FIXTURE_DIR,
+      question: 'Why was this retry workaround added, and can I safely remove it?',
+      focusFile: 'src/paymentClient.ts',
+    });
+
+    expect(output).toBeDefined();
+    expect(output.report).toBeDefined();
+    expect(['ollama-local', 'grounded-deterministic']).toContain(output.inferenceMode);
+
+    // Citations are strictly validated in either mode
+    const validEvidenceIds = new Set(output.report.evidence.map((e) => e.id));
+    for (const finding of output.report.findings) {
+      for (const id of finding.evidence_ids) {
+        expect(validEvidenceIds.has(id)).toBe(true);
+      }
+    }
+  }, 120000);
 });

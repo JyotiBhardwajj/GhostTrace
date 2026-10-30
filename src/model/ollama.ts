@@ -72,7 +72,7 @@ export async function generateWithOllama(
   };
 
   const controller = new AbortController();
-  const timeoutMs = parseInt(process.env.GHOSTTRACE_TOOL_TIMEOUT_MS || '60000', 10);
+  const timeoutMs = parseInt(process.env.GHOSTTRACE_MODEL_TIMEOUT_MS || '90000', 10);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;

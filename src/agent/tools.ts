@@ -108,3 +108,15 @@ export const mastraGitTools = {
   get_file_history: getFileHistoryTool,
   search_source: searchSourceTool,
 };
+
+export async function runMastraTool<T>(
+  tool: { execute?: (input: any, context: any) => Promise<any> },
+  input: any
+): Promise<T> {
+  if (!tool.execute) {
+    throw new Error('Mastra tool execute function is not defined');
+  }
+  const result = await tool.execute(input, {} as any);
+  return result as T;
+}
+

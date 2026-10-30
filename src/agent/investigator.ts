@@ -5,15 +5,25 @@ import { validateAndRepairCitations, ValidationResult } from '../evidence/valida
 import { formatEvidencePrompt, GHOSTTRACE_SYSTEM_PROMPT } from './prompts';
 import { checkOllamaHealth, generateWithOllama } from '../model/ollama';
 import { GhostTraceReport } from '../model/schemas';
-import { mastraGitTools } from './tools';
+import { mastraGitTools, runMastraTool } from './tools';
 import { Agent } from '@mastra/core/agent';
+import type {
+  RepoSummaryResult,
+  CommitSummary,
+  CommitDetails,
+  DiffResult,
+  BlameLineRecord,
+  SourceSearchResult,
+} from '../git/tools';
 
 /**
  * Mastra Agent definition configured with allow-listed Git investigation tools.
  */
 export const ghostTraceAgent = new Agent({
+  id: 'ghosttrace-investigator',
   name: 'GhostTrace Investigator',
   instructions: GHOSTTRACE_SYSTEM_PROMPT,
+  model: 'ollama/gemma2:2b',
   tools: mastraGitTools,
 });
 
@@ -28,6 +38,7 @@ export interface InvestigationOptions {
   question: string;
   focusFile?: string;
   model?: string;
+  forceFallback?: boolean;
   onProgress?: (event: InvestigationProgressEvent) => void;
 }
 
@@ -139,16 +150,16 @@ export async function runInvestigation(
   const keywords = extractKeywords(options.question);
 
   // Step 3: Run Git summary & search tools via Mastra registered tools
-  logProgress('MASTRA_TOOL', `Invoking mastraGitTools.repo_summary on ${realRoot}`);
-  const summary = await mastraGitTools.repo_summary.execute({ repoPath: realRoot });
+  logProgress('GIT_SUMMARY', `Invoking mastraGitTools.repo_summary on ${realRoot}`);
+  const summary = await runMastraTool<RepoSummaryResult>(mastraGitTools.repo_summary, { repoPath: realRoot });
 
   const collector = new EvidenceCollector(
     parseInt(process.env.GHOSTTRACE_MAX_EVIDENCE_ITEMS || '20', 10)
   );
 
   // Search history with keywords via Mastra registered tool
-  logProgress('MASTRA_TOOL', `Invoking mastraGitTools.search_history for keywords: [${keywords.join(', ')}]`);
-  let matchedCommits = await mastraGitTools.search_history.execute({
+  logProgress('SEARCH_HISTORY', `Invoking mastraGitTools.search_history for keywords: [${keywords.join(', ')}]`);
+  let matchedCommits = await runMastraTool<CommitSummary[]>(mastraGitTools.search_history, {
     repoPath: realRoot,
     query: keywords.join(' '),
     limit: 10,
@@ -157,7 +168,7 @@ export async function runInvestigation(
   if (matchedCommits.length === 0 && keywords.length > 1) {
     // Try individual keywords
     for (const kw of keywords.slice(0, 3)) {
-      const singleKwMatches = await mastraGitTools.search_history.execute({
+      const singleKwMatches = await runMastraTool<CommitSummary[]>(mastraGitTools.search_history, {
         repoPath: realRoot,
         query: kw,
         limit: 5,
@@ -181,15 +192,15 @@ export async function runInvestigation(
   // Step 4: Inspect diffs & blame for top commit via Mastra registered tools
   if (rankedCommits.length > 0) {
     const topCommitSha = rankedCommits[0].sha;
-    logProgress('MASTRA_TOOL', `Invoking mastraGitTools.get_commit and get_diff for ${rankedCommits[0].shortSha}`);
+    logProgress('INSPECT_COMMIT', `Invoking mastraGitTools.get_commit and get_diff for ${rankedCommits[0].shortSha}`);
     try {
-      const commitDetails = await mastraGitTools.get_commit.execute({
+      const commitDetails = await runMastraTool<CommitDetails>(mastraGitTools.get_commit, {
         repoPath: realRoot,
         sha: topCommitSha,
       });
       collector.addCommitDetails(commitDetails, 'mastra:get_commit');
 
-      const diffResult = await mastraGitTools.get_diff.execute({
+      const diffResult = await runMastraTool<DiffResult>(mastraGitTools.get_diff, {
         repoPath: realRoot,
         sha: topCommitSha,
         filePath: options.focusFile,
@@ -199,9 +210,9 @@ export async function runInvestigation(
       // Blame if a file was changed or focused
       const targetFile = options.focusFile || commitDetails.filesChanged[0];
       if (targetFile) {
-        logProgress('MASTRA_TOOL', `Invoking mastraGitTools.get_blame for ${targetFile}`);
+        logProgress('INSPECT_BLAME', `Invoking mastraGitTools.get_blame for ${targetFile}`);
         try {
-          const blameLines = await mastraGitTools.get_blame.execute({
+          const blameLines = await runMastraTool<BlameLineRecord[]>(mastraGitTools.get_blame, {
             repoPath: realRoot,
             filePath: targetFile,
             startLine: 1,
@@ -221,9 +232,9 @@ export async function runInvestigation(
 
   // Step 5: Grep source if keywords available via Mastra tool
   if (keywords.length > 0) {
-    logProgress('MASTRA_TOOL', `Invoking mastraGitTools.search_source for: "${keywords[0]}"`);
+    logProgress('SEARCH_SOURCE', `Invoking mastraGitTools.search_source for: "${keywords[0]}"`);
     try {
-      const sourceMatches = await mastraGitTools.search_source.execute({
+      const sourceMatches = await runMastraTool<SourceSearchResult[]>(mastraGitTools.search_source, {
         repoPath: realRoot,
         query: keywords[0],
       });
@@ -246,7 +257,7 @@ export async function runInvestigation(
   const ollamaHealth = await checkOllamaHealth();
   const hasTargetModel = ollamaHealth.running && ollamaHealth.models.some((m) => m.startsWith('gemma2:2b') || m.startsWith('gemma'));
 
-  if (ollamaHealth.running && hasTargetModel) {
+  if (!options.forceFallback && ollamaHealth.running && hasTargetModel) {
     logProgress('MODEL_SYNTHESIS', `Synthesizing report using local model: ${targetModel} via Ollama`);
     try {
       const prompt = formatEvidencePrompt(options.question, evidencePack);
