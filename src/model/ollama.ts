@@ -72,7 +72,7 @@ export async function generateWithOllama(
   };
 
   const controller = new AbortController();
-  const timeoutMs = parseInt(process.env.GHOSTTRACE_MODEL_TIMEOUT_MS || '90000', 10);
+  const timeoutMs = parseInt(process.env.GHOSTTRACE_MODEL_TIMEOUT_MS || '180000', 10);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;
@@ -107,6 +107,8 @@ export async function generateWithOllama(
 
   try {
     const parsed = JSON.parse(cleanJson);
+    if (!parsed.question) parsed.question = 'Investigation query';
+    if (!parsed.summary) parsed.summary = 'Investigation summary generated from repository evidence.';
     return GhostTraceReportSchema.parse(parsed);
   } catch (parseErr: unknown) {
     throw new Error(

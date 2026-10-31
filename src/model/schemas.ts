@@ -7,6 +7,7 @@ export const EvidenceItemSchema = z.object({
   id: z.string(), // E1, E2, ...
   kind: EvidenceKindSchema,
   commit_sha: z.string().nullable().optional(),
+  author: z.string().nullable().optional(),
   date: z.string().nullable().optional(),
   subject: z.string().nullable().optional(),
   file_path: z.string().nullable().optional(),
@@ -34,11 +35,12 @@ export type Hypothesis = z.infer<typeof HypothesisSchema>;
 export const GhostTraceReportSchema = z.object({
   question: z.string(),
   summary: z.string(),
-  findings: z.array(FindingSchema),
-  evidence: z.array(EvidenceItemSchema),
-  hypotheses: z.array(HypothesisSchema),
-  unknowns: z.array(z.string()),
-  limitations: z.array(z.string()),
+  findings: z.array(FindingSchema).default([]),
+  evidence: z.array(EvidenceItemSchema).default([]),
+  hypotheses: z.array(HypothesisSchema).default([]),
+  unknowns: z.array(z.string()).default([]),
+  limitations: z.array(z.string()).default([]),
+  contradictions: z.array(z.string()).optional(),
 });
 export type GhostTraceReport = z.infer<typeof GhostTraceReportSchema>;
 

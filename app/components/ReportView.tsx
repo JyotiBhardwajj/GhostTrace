@@ -153,6 +153,21 @@ ${report.limitations.map((l) => `- ${l}`).join('\n')}
         </div>
       )}
 
+      {/* Contradictions Detected Alert */}
+      {report.contradictions && report.contradictions.length > 0 && (
+        <div className="p-4 rounded-xl bg-red-950/40 border border-red-500/50 space-y-2 text-xs text-red-200">
+          <div className="flex items-center gap-2 text-red-400 font-bold uppercase tracking-wider text-xs">
+            <ShieldAlert className="w-4 h-4 text-red-400" />
+            Evidence Contradictions Detected ({report.contradictions.length})
+          </div>
+          <ul className="list-disc list-inside space-y-1 text-gray-200 font-mono text-[11px]">
+            {report.contradictions.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Executive Summary */}
       <div className="p-5 rounded-xl bg-ghost-surface border border-ghost-green/40 shadow-glowGreen relative overflow-hidden">
         <div className="flex items-center gap-2 mb-2">

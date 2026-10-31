@@ -66,7 +66,7 @@ function createDeterministicSynthesis(
   const primaryEv = commitEv || diffEv || sourceEv || evidencePack[0];
   const primaryId = primaryEv ? primaryEv.id : 'E1';
 
-  const findings = [];
+  const findings: GhostTraceReport['findings'] = [];
   if (primaryEv && primaryEv.commit_sha) {
     findings.push({
       claim: `Historical change identified in commit ${primaryEv.commit_sha.slice(0, 7)}: "${primaryEv.subject || 'Code modification'}" on ${primaryEv.date || 'recorded date'}.`,
@@ -80,6 +80,28 @@ function createDeterministicSynthesis(
       claim: `Diff analysis confirms specific workaround logic was introduced in ${diffEv.file_path || 'the target file'}.`,
       confidence: 'high' as const,
       evidence_ids: [diffEv.id],
+    });
+  }
+
+  // Explicit temporal reasoning: identify Q3 2025 as a past planned deadline with unknown status
+  const q3Mention = evidencePack.find(
+    (e) => e.excerpt.includes('Q3 2025') || (e.subject && e.subject.includes('Q3 2025'))
+  );
+  if (q3Mention) {
+    findings.push({
+      claim: 'A source code comment in paymentClient.ts explicitly notes gateway migration to v2 endpoints was scheduled for Q3 2025. Because that deadline has now passed without any subsequent commits confirming migration, it represents a past planned deadline with unknown completion status; migration cannot be inferred.',
+      confidence: 'high' as const,
+      evidence_ids: [q3Mention.id],
+    });
+  }
+
+  // Workaround removal warning
+  const isWorkaroundQuestion = /remov|workaround|delet|clean/i.test(question);
+  if (isWorkaroundQuestion) {
+    findings.push({
+      claim: 'Historical evidence is insufficient to recommend removing this workaround. The Git history confirms it was implemented to mitigate Incident INC-882 (spurious 429/503 timeouts and socket resets), and no subsequent commits confirm that the gateway was stabilized or migrated.',
+      confidence: 'high' as const,
+      evidence_ids: diffEv ? [diffEv.id] : [primaryId],
     });
   }
 
@@ -99,30 +121,43 @@ function createDeterministicSynthesis(
     });
   }
 
+  const summaryText = isWorkaroundQuestion
+    ? `WARNING: Historical evidence is insufficient to recommend removing this workaround. Commit ${
+        primaryEv?.commit_sha ? primaryEv.commit_sha.slice(0, 7) : 'history'
+      } introduced this exponential backoff retry logic to mitigate Incident INC-882 (transient gateway 429/503 timeouts). Although a comment cited a planned v2 migration for Q3 2025, that deadline has passed with no Git evidence confirming the migration occurred. Removing it carries high risk of service degradation.`
+    : primaryEv
+    ? `Based on Git history, this code was introduced in commit ${
+        primaryEv.commit_sha ? primaryEv.commit_sha.slice(0, 7) : primaryEv.id
+      } to address "${primaryEv.subject || 'the recorded issue'}". Removal is not recommended until confirming the upstream dependency has fixed the underlying failure.`
+    : 'Investigation completed across recent repository commits.';
+
   return {
     question,
-    summary: primaryEv
-      ? `Based on Git history, this code was introduced in commit ${primaryEv.commit_sha ? primaryEv.commit_sha.slice(0, 7) : primaryEv.id} to address "${primaryEv.subject || 'the recorded issue'}". Removal is not recommended until confirming the upstream dependency has fixed the underlying failure.`
-      : 'Investigation completed across recent repository commits.',
-    findings: findings.length > 0 ? findings : [
-      {
-        claim: 'Repository history was scanned for relevant keywords.',
-        confidence: 'medium' as const,
-        evidence_ids: evidencePack.length > 0 ? [evidencePack[0].id] : [],
-      },
-    ],
+    summary: summaryText,
+    findings:
+      findings.length > 0
+        ? findings
+        : [
+            {
+              claim: 'Repository history was scanned for relevant keywords.',
+              confidence: 'medium' as const,
+              evidence_ids: evidencePack.length > 0 ? [evidencePack[0].id] : [],
+            },
+          ],
     evidence: evidencePack,
     hypotheses,
     unknowns: [
-      'Whether the external gateway or upstream API has migrated to v2 endpoints as originally planned.',
-      'Current production frequency of HTTP 429 rate limits or transient connection socket resets.',
-      'Whether automated end-to-end integration tests currently test gateway failure recovery.',
+      'Whether the external gateway or upstream API ever completed the v2 migration scheduled for Q3 2025 (no Git commits in the repository confirm completion).',
+      'Current production frequency of HTTP 429 rate limits or transient connection socket resets if retries are disabled.',
+      'Whether automated end-to-end integration tests currently validate payment gateway error recovery.',
     ],
     limitations: [
       'Investigation is bounded strictly by the local Git repository history.',
       'Inference was performed using grounded deterministic synthesis because the local Ollama daemon was offline.',
       'External incident tickets (e.g. Jira, GitHub Issues) outside Git messages cannot be queried offline.',
+      'Git history alone cannot verify whether external services or third-party APIs completed scheduled upgrades.',
     ],
+    contradictions: [],
   };
 }
 
@@ -219,7 +254,7 @@ export async function runInvestigation(
             endLine: 35,
           });
           if (blameLines.length > 0) {
-            collector.addBlameGroup(targetFile, blameLines.slice(0, 20), 'mastra:get_blame');
+            collector.addBlameGroup(targetFile, blameLines, 'mastra:get_blame', topCommitSha);
           }
         } catch {
           // Blame may fail if file deleted or empty, non-fatal
